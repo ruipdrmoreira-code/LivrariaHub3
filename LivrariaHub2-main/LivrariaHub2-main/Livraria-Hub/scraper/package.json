@@ -1,0 +1,11 @@
+{
+  "name": "livrariahub-wook-scraper",
+  "private": true,
+  "scripts": {
+    "scrape": "node index.js"
+  },
+  "dependencies": {
+    "mysql2": "^3.22.2",
+    "puppeteer": "^24.42.0"
+  }
+}

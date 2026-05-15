@@ -1,0 +1,13 @@
+{
+  "name": "livrariahub2-main",
+  "private": true,
+  "scripts": {
+    "scrape": "node index.js",
+    "web": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "mysql2": "^3.22.2",
+    "puppeteer": "^24.42.0"
+  }
+}
