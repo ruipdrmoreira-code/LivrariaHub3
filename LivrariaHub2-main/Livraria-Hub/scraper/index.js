@@ -6,7 +6,7 @@ const DB_CONFIG = {
   port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER || process.env.DB_USERNAME || "root",
   password: process.env.DB_PASSWORD || "",
-  database: process.env.DB_NAME || process.env.DB_DATABASE || "livrariahub",
+  database: process.env.DB_NAME || process.env.DB_DATABASE || "livrariahub2",
 };
 
 /** Secções iniciais (1.º ao 12.º ano). Pré-escolar removido a pedido. */
@@ -28,7 +28,7 @@ const URLS_WOOK = [
 ];
 const ESPERA_ENTRE_PAGINAS_MS = 2500;
 /** Máximo de páginas ?page=N por cada URL de listagem (podes subir com SCRAPER_MAX_PAGES). */
-const MAX_PAGINAS_POR_LISTAGEM = Math.min(Number(process.env.SCRAPER_MAX_PAGES || 8), 25);
+const MAX_PAGINAS_POR_LISTAGEM = Math.min(Number(process.env.SCRAPER_MAX_PAGES || 18), 25);
 /** Se "false", também grava anos fora de 1–12 (não recomendado). */
 const APENAS_ANOS_1_A_12 = process.env.SCRAPER_ONLY_YEARS_1_12 !== "false";
 const APAGAR_NAO_ESCOLARES = process.env.SCRAPER_DELETE_NON_SCHOOL === "true";
@@ -434,7 +434,7 @@ function mapearDisciplina(textoBase) {
   if (texto.includes("inglês") || texto.includes("ingles")) return "Ingles";
   if (texto.includes("francês") || texto.includes("frances")) return "Frances";
   if (texto.includes("espanhol")) return "Espanhol";
-  if (texto.includes("portugu")) return "Portugues";
+  if (texto.includes("portugu") && !texto.includes("portugal")) return "Portugues";
   if (texto.includes("matem")) return "Matematica";
   if (texto.includes("hist")) return "Historia";
   if (texto.includes("hgp")) return "Historia e Geografia de Portugal";
@@ -484,10 +484,9 @@ function extrairContextoRelevante(texto) {
 
 function temDadosMinimos(livro) {
   if (!livro?.titulo || !livro?.link) return false;
-  const temEditora = livro.editora && livro.editora.toLowerCase() !== "desconhecida";
-  const temIsbn = Boolean(livro.isbn);
-  const temPreco = Number(livro.preco) > 0;
-  return temPreco || temEditora || temIsbn;
+  // Livros escolares muitas vezes não têm ISBN na listagem, e podem estar sem preço (esgotados).
+  // Como já filtramos estritamente antes, podemos ser menos exigentes aqui.
+  return true;
 }
 
 function esperar(ms) {
@@ -1166,24 +1165,9 @@ async function guardarNoMySql(livros) {
       `,
     );
 
-    // Remove registos pobres: sem preco, sem editora valida e sem ISBN.
-    await connection.execute(
-      `
-      DELETE FROM livros
-      WHERE COALESCE(preco, 0) <= 0
-        AND (editora IS NULL OR TRIM(editora) = '' OR LOWER(editora) = 'desconhecida')
-        AND (isbn IS NULL OR TRIM(isbn) = '')
-      `,
-    );
+    // Remove registos pobres que não têm literalmente nenhuma utilidade (sem titulo e sem link).
+    // Mas preservamos os escolares mesmo sem preço/editora porque já passaram pelo filtro estrito.
 
-    // Remove livros escolares sem preco util.
-    await connection.execute(
-      `
-      DELETE FROM livros
-      WHERE COALESCE(preco, 0) <= 0
-        AND LOWER(COALESCE(disciplina, '')) IN ('educacao', 'educação', 'portugues', 'matematica', 'ingles', 'frances', 'espanhol', 'historia', 'geografia', 'fisico-quimica', 'biologia', 'filosofia', 'ciencias')
-      `,
-    );
 
     // Garante que sobram apenas livros escolares (remove lixo antigo de romance/literatura).
     await connection.execute(
@@ -1289,48 +1273,14 @@ async function main() {
     const livrosEscolares = livrosColetados.filter(ehLivroEscolar);
     console.log(`Livros escolares filtrados: ${livrosEscolares.length}`);
     if (livrosEscolares.length === 0) throw new Error("Nao foram encontrados livros escolares.");
-    const paginaDetalhe = await browser.newPage();
-    await paginaDetalhe.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    );
-
-    const livrosEnriquecidos = [];
-    for (const livro of livrosEscolares) {
-      try {
-        const detalhe = await extrairDetalhesLivro(paginaDetalhe, livro.link);
-        const textoContexto = `${livro.contextoSecao || ""} ${detalhe.titulo || ""}`;
-        const anoSecao = mapearAnoEscolar(textoContexto);
-        const disciplinaTitulo = mapearDisciplina(`${detalhe.titulo || ""} ${livro.titulo || ""}`);
-        livrosEnriquecidos.push({
-          ...livro,
-          ...detalhe,
-          titulo: (() => {
-            const t = escolherTituloFinal(
-              detalhe.titulo,
-              livro.titulo,
-              primeiroTrechoMetaDescricao(detalhe.descricaoCurta),
-            );
-            return t || tituloDeSlugUrlWook(livro.link) || "";
-          })(),
-          isbn: detalhe.isbn || livro.isbn,
-          preco: detalhe.preco || livro.preco,
-          disciplina: detalhe.disciplina === "Educacao" ? disciplinaTitulo : detalhe.disciplina,
-          anoEscolar: detalhe.anoEscolar || anoSecao,
-        });
-      } catch (erroDetalhe) {
-        livrosEnriquecidos.push({
-          ...livro,
-          titulo: escolherTituloFinal(livro.titulo) || tituloDeSlugUrlWook(livro.link) || "",
-          tipo: mapearTipo(`${livro.titulo} ${livro.contextoSecao || ""}`),
-          disciplina: mapearDisciplina(`${livro.titulo} ${livro.contextoSecao || ""}`),
-          anoEscolar: mapearAnoEscolar(`${livro.titulo} ${livro.contextoSecao || ""}`),
-          editora:
-            sanearNomeEditora(livro.editora) || inferirEditoraDoTitulo(limparTitulo(livro.titulo)) || "Desconhecida",
-        });
-      }
-    }
-
-    await paginaDetalhe.close();
+    const livrosEnriquecidos = livrosEscolares.map((livro) => ({
+      ...livro,
+      titulo: escolherTituloFinal(livro.titulo) || tituloDeSlugUrlWook(livro.link) || "",
+      tipo: mapearTipo(`${livro.titulo} ${livro.contextoSecao || ""}`),
+      disciplina: mapearDisciplina(`${livro.titulo} ${livro.contextoSecao || ""}`),
+      anoEscolar: mapearAnoEscolar(`${livro.titulo} ${livro.contextoSecao || ""}`),
+      editora: sanearNomeEditora(livro.editora) || inferirEditoraDoTitulo(limparTitulo(livro.titulo)) || "Desconhecida",
+    }));
     for (const l of livrosEnriquecidos) {
       l.anoEscolar = resolverAnoEscolarFinal(l);
       l.editora = resolverEditoraFinal(l);
@@ -1339,6 +1289,7 @@ async function main() {
     console.log(
       `Livros apos filtro estrito e ano 1-12 (${APENAS_ANOS_1_A_12 ? "ativo" : "desativado"}): ${livrosFinais.length}`,
     );
+    require("fs").writeFileSync("livros_finais_dump.json", JSON.stringify(livrosFinais, null, 2));
     const totalInseridos = await guardarNoMySql(livrosFinais);
     console.log(`Registos inseridos/atualizados na BD: ${totalInseridos}`);
     console.log(
